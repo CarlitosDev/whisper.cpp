@@ -749,6 +749,8 @@ bool output_ann(struct whisper_context * ctx, const char * fname, const char * f
     fp = fopen (fname, "w+");
 
     fprintf(stderr, "%s: saving output to '%s'\n", __func__, fname);
+    // TODO: add `segment_id` (word counter)
+    fprintf(fp, "tt,token_probability,token_prob_timestamp,token_prob_timestamp_sum,token_vlen,token_t0,token_t1,content\n");
 
 
     bool is_first = true;
@@ -960,12 +962,17 @@ bool output_ann(struct whisper_context * ctx, const char * fname, const char * f
 
         // debug info
         // TODO: toggle via parameter
-        fprintf(fp, "tt token.p token.pt token.ptsum token.vlen token.t0 token.t1 token.text\n");
+        std::string token_text;
         for (int j = 0; j < n; ++j) {
             const auto & token = tokens[j];
-            const auto tt = token.pt > params.word_thold && token.ptsum > 0.01 ? whisper_token_to_str(ctx, token.tid) : "[?]";
-            fprintf(fp, "%10s %6.3f %6.3f %6.3f %6.3f %5d %5d '%s'\n",
-                    tt, token.p, token.pt, token.ptsum, token.vlen, (int) token.t0, (int) token.t1, token.text.c_str());
+            // const auto tt = token.pt > params.word_thold && token.ptsum > 0.01 ? whisper_token_to_str(ctx, token.tid) : "[?]";
+            // fprintf(fp, "%10s %6.3f %6.3f %6.3f %6.3f %5d %5d '%s'\n",
+            //         tt, token.p, token.pt, token.ptsum, token.vlen, (int) token.t0, (int) token.t1, token.text.c_str());
+            token_text = token.text.c_str();
+            token_text.erase(remove_if(token_text.begin(), token_text.end(), isspace), token_text.end());
+            fprintf(fp, "%10s,%6.3f,%6.3f,%6.3f,%6.3f,%5d,%5d,%s\n",
+                    whisper_token_to_str(ctx, token.tid), token.p, token.pt, token.ptsum, token.vlen, (int) token.t0, (int) token.t1, token_text.c_str());
+            
 
             if (tokens[j].id >= whisper_token_eot(ctx)) {
                 continue;
