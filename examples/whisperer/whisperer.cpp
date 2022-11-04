@@ -541,8 +541,10 @@ int read_stereo_speaker_flac_file(std::string fname_inp,
   std::vector<float>& pcmf32_left, 
   std::vector<float>& pcmf32_right){
 
+
     drflac* pFlac = drflac_open_file(fname_inp.c_str(), NULL);
     int n = pFlac->totalPCMFrameCount;
+    fprintf(stderr, "Reading stereo FLAC %d samples and %d channels\n", n, pFlac->channels);
 
     std::vector<int16_t> pcm16;
     pcm16.resize(n*pFlac->channels);
@@ -550,10 +552,12 @@ int read_stereo_speaker_flac_file(std::string fname_inp,
     drflac_close(pFlac);
 
     // convert to 2 mono arrays, float
-    int n_mono = int(n/2);
-    pcmf32_left.resize(n_mono);
-    pcmf32_right.resize(n_mono);
-
+    // int n_mono = int(n/2);
+    // pcmf32_left.resize(n_mono);
+    // pcmf32_right.resize(n_mono);
+    pcmf32_left.resize(n);
+    pcmf32_right.resize(n);
+    fprintf(stderr, "About to go for it\n");
     if (pFlac->channels == 2) {
         for (int i = 0; i < n; i++) {
             pcmf32_left[i] = float(pcm16[2*i])/32768.0f;
