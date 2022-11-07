@@ -26,8 +26,8 @@ Supported platforms:
 
 The entire implementation of the model is contained in 2 source files:
 
-- [ggml.h](ggml.h) / [ggml.c](ggml.c)
-- [whisper.h](whisper.h) / [whisper.cpp](whisper.cpp)
+- Tensor operations: [ggml.h](ggml.h) / [ggml.c](ggml.c)
+- Transformer inference: [whisper.h](whisper.h) / [whisper.cpp](whisper.cpp)
 
 Having such a lightweight implementation of the model allows to easily integrate it in different platforms and applications.
 As an example, here is a video of running the model on an iPhone 13 device - fully offline, on-device:
@@ -437,9 +437,12 @@ For more details, see the conversion script [models/convert-pt-to-ggml.py](model
 ## Bindings
 
 - [X] Rust: [tazz4843/whisper-rs](https://github.com/tazz4843/whisper-rs)
+- [X] Objective-C / Swift: [ggerganov/whisper.spm](https://github.com/ggerganov/whisper.spm)
 - [ ] Python:
 - [ ] Java:
 
 ## Examples
 
 There are various examples of using the library for different projects in the [examples](examples) folder. Check them out!
+
+## [Frequently asked questions (#126)](https://github.com/ggerganov/whisper.cpp/discussions/126)
