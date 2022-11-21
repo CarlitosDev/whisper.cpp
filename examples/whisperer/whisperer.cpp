@@ -4,6 +4,9 @@
 // use your favorite implementations
 #define DR_WAV_IMPLEMENTATION
 #include "dr_wav.h"
+// include dr flac too
+#define DR_FLAC_IMPLEMENTATION
+#include "dr_flac.h"
 
 #include <cmath>
 #include <fstream>
@@ -11,6 +14,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <filesystem>
 
 // Terminal color map. 10 colors grouped in ranges [0.0, 0.1, ..., 0.9]
 // Lowest is red, middle is yellow, highest is green.
@@ -67,6 +71,7 @@ struct whisper_params {
     bool print_special_tokens = false;
     bool print_colors         = false;
     bool no_timestamps        = false;
+    bool stereo_speakers      = false;
 
     std::string language  = "en";
     std::string model     = "models/ggml-medium.en.bin";
@@ -132,6 +137,8 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
             params.model = argv[++i];
         } else if (arg == "-f" || arg == "--file") {
             params.fname_inp.push_back(argv[++i]);
+        } else if (arg == "-sp" || arg == "--stereo_speakers") {
+            params.stereo_speakers = true;
         } else if (arg == "-h" || arg == "--help") {
             whisper_print_usage(argc, argv, params);
             exit(0);
@@ -166,6 +173,7 @@ void whisper_print_usage(int argc, char ** argv, const whisper_params & params) 
     fprintf(stderr, "  -osrt,    --output-srt           output result in a srt file\n");
     fprintf(stderr, "  -owts,    --output-words         output script for generating karaoke video\n");
     fprintf(stderr, "  -oann,    --output-annotations   output word-level timestamps to a text file\n");
+    fprintf(stderr, "  -sp,      --stereo_speakers      Process each audio channel independently\n");
     fprintf(stderr, "  -ps,      --print_special        print special tokens\n");
     fprintf(stderr, "  -pc,      --print_colors         print colors\n");
     fprintf(stderr, "  -nt,      --no_timestamps        do not print timestamps\n");
@@ -472,10 +480,253 @@ bool output_ann(struct whisper_context * ctx, const char * fname) {
     return true;
 }
 
+//
+bool check_wav_file(std::string main_module, std::string fname_inp){
+
+    bool valid_audio = true;
+
+    drwav wav;
+    if (!drwav_init_file(&wav, fname_inp.c_str(), NULL)) {
+        fprintf(stderr, "%s: failed to open WAV file '%s' - check your input\n", main_module.c_str(), fname_inp.c_str());
+        valid_audio = false;
+    }
+
+    if (wav.channels != 1 && wav.channels != 2) {
+        fprintf(stderr, "%s: WAV file '%s' must be mono or stereo\n", main_module.c_str(), fname_inp.c_str());
+        valid_audio = false;
+    }
+
+    if (wav.sampleRate != WHISPER_SAMPLE_RATE) {
+        fprintf(stderr, "%s: WAV file '%s' must be 16 kHz\n", main_module.c_str(), fname_inp.c_str());
+        valid_audio = false;
+    }
+
+    if (wav.bitsPerSample != 16) {
+        fprintf(stderr, "%s: WAV file '%s' must be 16-bit\n", main_module.c_str(), fname_inp.c_str());
+        valid_audio = false;
+    }
+    return valid_audio;
+}
+
+// write here the read wav
+std::vector<float> read_wav_file(std::string fname_inp){
+    // WAV input
+    std::vector<float> pcmf32;
 
 
-int main(int argc, char ** argv) {
+    drwav wav;
+    drwav_init_file(&wav, fname_inp.c_str(), NULL);
+    int n = wav.totalPCMFrameCount;
+
+    std::vector<int16_t> pcm16;
+    pcm16.resize(n*wav.channels);
+    drwav_read_pcm_frames_s16(&wav, n, pcm16.data());
+    drwav_uninit(&wav);
+
+    // convert to mono, float
+    pcmf32.resize(n);
+    if (wav.channels == 1) {
+        for (int i = 0; i < n; i++) {
+            pcmf32[i] = float(pcm16[i])/32768.0f;
+        }
+    } else {
+        for (int i = 0; i < n; i++) {
+            pcmf32[i] = float(pcm16[2*i] + pcm16[2*i + 1])/65536.0f;
+        }
+    }
+    return pcmf32;
+}
+
+int read_stereo_speaker_flac_file(std::string fname_inp,
+  std::vector<float>& pcmf32_left, 
+  std::vector<float>& pcmf32_right){
+
+
+    drflac* pFlac = drflac_open_file(fname_inp.c_str(), NULL);
+    int n = pFlac->totalPCMFrameCount;
+    fprintf(stderr, "Reading stereo FLAC %d samples and %d channels\n", n, pFlac->channels);
+
+    std::vector<int16_t> pcm16;
+    pcm16.resize(n*pFlac->channels);
+    drflac_read_pcm_frames_s16(pFlac, n, pcm16.data());
+    drflac_close(pFlac);
+
+    // convert to 2 mono arrays, float
+    // int n_mono = int(n/2);
+    // pcmf32_left.resize(n_mono);
+    // pcmf32_right.resize(n_mono);
+    pcmf32_left.resize(n);
+    pcmf32_right.resize(n);
+    fprintf(stderr, "About to go for it\n");
+    if (pFlac->channels == 2) {
+        for (int i = 0; i < n; i++) {
+            pcmf32_left[i] = float(pcm16[2*i])/32768.0f;
+            pcmf32_right[i] = float(pcm16[2*i + 1])/32768.0f;
+        }
+    }
+    return 0;
+}
+
+
+bool check_flac_file(std::string main_module, std::string fname_inp){
+
+    bool valid_audio = true;
+
+    drflac* pFlac = drflac_open_file(fname_inp.c_str(), NULL);
+
+    if (pFlac == NULL) {
+        fprintf(stderr, "%s: failed to open FLAC file '%s' - check your input\n", main_module.c_str(), fname_inp.c_str());
+        valid_audio = false;
+    }
+
+    if (pFlac->channels != 1 && pFlac->channels != 2) {
+        fprintf(stderr, "%s: FLAC file '%s' must be mono or stereo\n", main_module.c_str(), fname_inp.c_str());
+        valid_audio = false;
+    }
+
+    if (pFlac->sampleRate != WHISPER_SAMPLE_RATE) {
+        fprintf(stderr, "%s: FLAC file '%s' must be 16 kHz\n", main_module.c_str(), fname_inp.c_str());
+        valid_audio = false;
+    }
+
+    if (pFlac->bitsPerSample != 16) {
+        fprintf(stderr, "%s: FLAC file '%s' must be 16-bit\n", main_module.c_str(), fname_inp.c_str());
+        valid_audio = false;
+    }
+    drflac_close(pFlac);
+    return valid_audio;
+}
+
+std::vector<float> read_flac_file(std::string fname_inp){
+    // FLAC input
+    std::vector<float> pcmf32;
+
+    drflac* pFlac = drflac_open_file(fname_inp.c_str(), NULL);
+    int n = pFlac->totalPCMFrameCount;
+
+    std::vector<int16_t> pcm16;
+    pcm16.resize(n*pFlac->channels);
+    drflac_read_pcm_frames_s16(pFlac, n, pcm16.data());
+    drflac_close(pFlac);
+
+    // convert to mono, float
+    pcmf32.resize(n);
+    if (pFlac->channels == 1) {
+        for (int i = 0; i < n; i++) {
+            pcmf32[i] = float(pcm16[i])/32768.0f;
+        }
+    } else {
+        for (int i = 0; i < n; i++) {
+            pcmf32[i] = float(pcm16[2*i] + pcm16[2*i + 1])/65536.0f;
+        }
+    }
+    return pcmf32;
+}
+
+
+
+
+int run_whisper(std::string fname_inp, 
+    struct whisper_context * ctx,
+    struct whisper_params params,
+    std::vector<float> pcmf32) {
+
+    // print system information
+    fprintf(stderr, "\n");
+    fprintf(stderr, "system_info: n_threads = %d / %d | %s\n",
+            params.n_threads*params.n_processors, std::thread::hardware_concurrency(), whisper_print_system_info());
+
+    // print some info about the processing
+    {
+        fprintf(stderr, "\n");
+        if (!whisper_is_multilingual(ctx)) {
+            if (params.language != "en" || params.translate) {
+                params.language = "en";
+                params.translate = false;
+                fprintf(stderr, "%s: WARNING: model is not multilingual, ignoring language and translation options\n", __func__);
+            }
+        }
+        fprintf(stderr, "%s: processing '%s' (%d samples, %.1f sec), %d threads, %d processors, lang = %s, task = %s, timestamps = %d ...\n",
+                __func__, fname_inp.c_str(), int(pcmf32.size()), float(pcmf32.size())/WHISPER_SAMPLE_RATE,
+                params.n_threads, params.n_processors,
+                params.language.c_str(),
+                params.translate ? "translate" : "transcribe",
+                params.no_timestamps ? 0 : 1);
+
+        fprintf(stderr, "\n");
+    }
+
+
+    // run the inference
+    {
+        whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+
+        wparams.print_realtime       = false;
+        wparams.print_progress       = false;
+        wparams.print_timestamps     = !params.no_timestamps;
+        wparams.print_special_tokens = params.print_special_tokens;
+        wparams.translate            = params.translate;
+        wparams.language             = params.language.c_str();
+        wparams.n_threads            = params.n_threads;
+        wparams.n_max_text_ctx       = params.max_context >= 0 ? params.max_context : wparams.n_max_text_ctx;
+        wparams.offset_ms            = params.offset_t_ms;
+
+        wparams.token_timestamps     = params.output_wts || params.max_len > 0;
+        wparams.thold_pt             = params.word_thold;
+        wparams.max_len              = params.output_wts && params.max_len == 0 ? 60 : params.max_len;
+
+        // this callback is called on each new segment
+        if (!wparams.print_realtime) {
+            wparams.new_segment_callback           = whisper_print_segment_callback;
+            wparams.new_segment_callback_user_data = &params;
+        }
+
+        if (whisper_full_parallel(ctx, wparams, pcmf32.data(), pcmf32.size(), params.n_processors) != 0) {
+            fprintf(stderr, "Failed to process audio\n");
+            return 8;
+        }
+    }
+
+    // output stuff
+    {
+        printf("\n");
+
+        // output to text file
+        if (params.output_txt) {
+            const auto fname_txt = fname_inp + ".txt";
+            output_txt(ctx, fname_txt.c_str());
+        }
+
+        // output to VTT file
+        if (params.output_vtt) {
+            const auto fname_vtt = fname_inp + ".vtt";
+            output_vtt(ctx, fname_vtt.c_str());
+        }
+
+        // output to SRT file
+        if (params.output_srt) {
+            const auto fname_srt = fname_inp + ".srt";
+            output_srt(ctx, fname_srt.c_str(), params);
+        }
+
+        // output to WTS file
+        if (params.output_wts) {
+            const auto fname_wts = fname_inp + ".wts";
+            output_wts(ctx, fname_wts.c_str(), fname_inp.c_str(), params, float(pcmf32.size() + 1000)/WHISPER_SAMPLE_RATE);
+        }
+        // output to text file
+        if (params.output_ann) {
+            const auto fname_wts = fname_inp + ".text";
+            output_ann(ctx, fname_wts.c_str());
+        }
+    }
+
+    return 0;
+}
+
+int main(int argc, char ** argv){
     whisper_params params;
+    std::vector<float> pcmf32;
 
     if (whisper_params_parse(argc, argv, params) == false) {
         return 1;
@@ -492,7 +743,6 @@ int main(int argc, char ** argv) {
     }
 
     // whisper init
-
     struct whisper_context * ctx = whisper_init(params.model.c_str());
 
     if (ctx == nullptr) {
@@ -500,149 +750,42 @@ int main(int argc, char ** argv) {
         return 3;
     }
 
+    const std::string main_module = std::string(argv[0]);
+
     for (int f = 0; f < (int) params.fname_inp.size(); ++f) {
         const auto fname_inp = params.fname_inp[f];
-
-        // WAV input
-        std::vector<float> pcmf32;
-        {
-            drwav wav;
-            if (!drwav_init_file(&wav, fname_inp.c_str(), NULL)) {
-                fprintf(stderr, "%s: failed to open WAV file '%s' - check your input\n", argv[0], fname_inp.c_str());
-                whisper_print_usage(argc, argv, {});
-                return 4;
+        
+        std::string f_ext = std::__fs::filesystem::path(fname_inp).extension();
+        if (!params.stereo_speakers) {
+            if (f_ext==".flac"){
+                bool valid_file = check_flac_file(main_module, fname_inp);
+                if (!valid_file) return 4;
+                pcmf32 = read_flac_file(fname_inp);
+            }
+            else{
+                bool valid_file = check_wav_file(main_module, fname_inp);
+                if (!valid_file) return 4;
+                pcmf32 = read_wav_file(fname_inp);
             }
 
-            if (wav.channels != 1 && wav.channels != 2) {
-                fprintf(stderr, "%s: WAV file '%s' must be mono or stereo\n", argv[0], fname_inp.c_str());
-                return 5;
-            }
-
-            if (wav.sampleRate != WHISPER_SAMPLE_RATE) {
-                fprintf(stderr, "%s: WAV file '%s' must be 16 kHz\n", argv[0], fname_inp.c_str());
-                return 6;
-            }
-
-            if (wav.bitsPerSample != 16) {
-                fprintf(stderr, "%s: WAV file '%s' must be 16-bit\n", argv[0], fname_inp.c_str());
-                return 7;
-            }
-
-            int n = wav.totalPCMFrameCount;
-
-            std::vector<int16_t> pcm16;
-            pcm16.resize(n*wav.channels);
-            drwav_read_pcm_frames_s16(&wav, n, pcm16.data());
-            drwav_uninit(&wav);
-
-            // convert to mono, float
-            pcmf32.resize(n);
-            if (wav.channels == 1) {
-                for (int i = 0; i < n; i++) {
-                    pcmf32[i] = float(pcm16[i])/32768.0f;
-                }
-            } else {
-                for (int i = 0; i < n; i++) {
-                    pcmf32[i] = float(pcm16[2*i] + pcm16[2*i + 1])/65536.0f;
-                }
-            }
+            int result = run_whisper(fname_inp,ctx,params,pcmf32);
         }
-
-        // print system information
+        else
         {
-            fprintf(stderr, "\n");
-            fprintf(stderr, "system_info: n_threads = %d / %d | %s\n",
-                    params.n_threads*params.n_processors, std::thread::hardware_concurrency(), whisper_print_system_info());
-        }
-
-        // print some info about the processing
-        {
-            fprintf(stderr, "\n");
-            if (!whisper_is_multilingual(ctx)) {
-                if (params.language != "en" || params.translate) {
-                    params.language = "en";
-                    params.translate = false;
-                    fprintf(stderr, "%s: WARNING: model is not multilingual, ignoring language and translation options\n", __func__);
-                }
+            std::vector<float> pcmf32_left, pcmf32_right;
+            if (f_ext==".flac"){
+                int read_result = read_stereo_speaker_flac_file(fname_inp, pcmf32_left, pcmf32_right);
+                fprintf(stderr, "%s detected as stereo FLAC file.\n", fname_inp.c_str());
+                fprintf(stderr, "Transcribing left channel\n");
+                int result_left = run_whisper(fname_inp + "_left",ctx,params,pcmf32_left);
+                fprintf(stderr, "Transcribing right channel\n");
+                int result_right = run_whisper(fname_inp + "_right",ctx,params,pcmf32_right);
             }
-            fprintf(stderr, "%s: processing '%s' (%d samples, %.1f sec), %d threads, %d processors, lang = %s, task = %s, timestamps = %d ...\n",
-                    __func__, fname_inp.c_str(), int(pcmf32.size()), float(pcmf32.size())/WHISPER_SAMPLE_RATE,
-                    params.n_threads, params.n_processors,
-                    params.language.c_str(),
-                    params.translate ? "translate" : "transcribe",
-                    params.no_timestamps ? 0 : 1);
-
-            fprintf(stderr, "\n");
-        }
-
-
-        // run the inference
-        {
-            whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-
-            wparams.print_realtime       = false;
-            wparams.print_progress       = false;
-            wparams.print_timestamps     = !params.no_timestamps;
-            wparams.print_special_tokens = params.print_special_tokens;
-            wparams.translate            = params.translate;
-            wparams.language             = params.language.c_str();
-            wparams.n_threads            = params.n_threads;
-            wparams.n_max_text_ctx       = params.max_context >= 0 ? params.max_context : wparams.n_max_text_ctx;
-            wparams.offset_ms            = params.offset_t_ms;
-
-            wparams.token_timestamps     = params.output_wts || params.max_len > 0;
-            wparams.thold_pt             = params.word_thold;
-            wparams.max_len              = params.output_wts && params.max_len == 0 ? 60 : params.max_len;
-
-            // this callback is called on each new segment
-            if (!wparams.print_realtime) {
-                wparams.new_segment_callback           = whisper_print_segment_callback;
-                wparams.new_segment_callback_user_data = &params;
-            }
-
-            if (whisper_full_parallel(ctx, wparams, pcmf32.data(), pcmf32.size(), params.n_processors) != 0) {
-                fprintf(stderr, "%s: failed to process audio\n", argv[0]);
-                return 8;
-            }
-        }
-
-        // output stuff
-        {
-            printf("\n");
-
-            // output to text file
-            if (params.output_txt) {
-                const auto fname_txt = fname_inp + ".txt";
-                output_txt(ctx, fname_txt.c_str());
-            }
-
-            // output to VTT file
-            if (params.output_vtt) {
-                const auto fname_vtt = fname_inp + ".vtt";
-                output_vtt(ctx, fname_vtt.c_str());
-            }
-
-            // output to SRT file
-            if (params.output_srt) {
-                const auto fname_srt = fname_inp + ".srt";
-                output_srt(ctx, fname_srt.c_str(), params);
-            }
-
-            // output to WTS file
-            if (params.output_wts) {
-                const auto fname_wts = fname_inp + ".wts";
-                output_wts(ctx, fname_wts.c_str(), fname_inp.c_str(), params, float(pcmf32.size() + 1000)/WHISPER_SAMPLE_RATE);
-            }
-            // output to text file
-            if (params.output_ann) {
-                const auto fname_wts = fname_inp + ".text";
-                output_ann(ctx, fname_wts.c_str());
-            }
+            else fprintf(stderr, "error: stereo only works with FLAC files.\n");
         }
     }
-
     whisper_print_timings(ctx);
     whisper_free(ctx);
-
     return 0;
+    
 }
