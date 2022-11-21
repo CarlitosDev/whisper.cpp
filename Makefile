@@ -50,7 +50,19 @@ endif
 # TODO: probably these flags need to be tweaked on some architectures
 #       feel free to update the Makefile for your architecture and send a pull request or issue
 ifeq ($(UNAME_M),x86_64)
-	CFLAGS += -mavx -mavx2 -mfma -mf16c
+	CFLAGS += -mfma -mf16c
+	ifeq ($(UNAME_S),Darwin)
+		AVX1_M := $(shell sysctl machdep.cpu.features)
+		ifneq (,$(findstring AVX1.0,$(AVX1_M)))
+			CFLAGS += -mavx
+		endif
+		AVX2_M := $(shell sysctl machdep.cpu.leaf7_features)
+		ifneq (,$(findstring AVX2,$(AVX2_M)))
+			CFLAGS += -mavx2
+		endif
+	else
+		CFLAGS += -mavx -mavx2
+	endif
 endif
 ifeq ($(UNAME_M),amd64)
 	CFLAGS += -mavx -mavx2 -mfma -mf16c
@@ -77,13 +89,11 @@ ifneq ($(filter armv8%,$(UNAME_M)),)
 	CFLAGS += -mfp16-format=ieee -mno-unaligned-access
 endif
 
-#
-# Build library + main
-#
+default: main
 
-main: examples/main/main.cpp ggml.o whisper.o
-	$(CXX) $(CXXFLAGS) examples/main/main.cpp whisper.o ggml.o -o main $(LDFLAGS)
-	./main -h
+#
+# Build library
+#
 
 ggml.o: ggml.c ggml.h
 	$(CC)  $(CFLAGS)   -c ggml.c -o ggml.o
@@ -94,14 +104,21 @@ whisper.o: whisper.cpp whisper.h
 libwhisper.a: ggml.o whisper.o
 	$(AR) rcs libwhisper.a ggml.o whisper.o
 
+libwhisper.so: ggml.o whisper.o
+	$(CXX) $(CXXFLAGS) -shared -o libwhisper.so ggml.o whisper.o $(LDFLAGS)
+
 clean:
-	rm -f *.o main stream bench libwhisper.a
+	rm -f *.o main stream bench libwhisper.a libwhisper.so
 
 #
 # Examples
 #
 
 CC_SDL=`sdl2-config --cflags --libs`
+
+main: examples/main/main.cpp ggml.o whisper.o
+	$(CXX) $(CXXFLAGS) examples/main/main.cpp ggml.o whisper.o -o main $(LDFLAGS)
+	./main -h
 
 stream: examples/stream/stream.cpp ggml.o whisper.o
 	$(CXX) $(CXXFLAGS) examples/stream/stream.cpp ggml.o whisper.o -o stream $(CC_SDL) $(LDFLAGS)

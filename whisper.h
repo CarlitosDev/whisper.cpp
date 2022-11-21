@@ -186,10 +186,12 @@ extern "C" {
 
         int n_threads;
         int n_max_text_ctx;
-        int offset_ms;
+        int offset_ms;      // start offset in ms
+        int duration_ms;    // audio duration to process in ms
 
         bool translate;
         bool no_context;
+        bool single_segment; // force single segment output (useful for streaming)
         bool print_special_tokens;
         bool print_progress;
         bool print_realtime;
@@ -200,6 +202,11 @@ extern "C" {
         float thold_pt;         // timestamp token probability threshold (~0.01)
         float thold_ptsum;      // timestamp token sum probability threshold (~0.01)
         int   max_len;          // max segment length in characters
+        int   max_tokens;       // max tokens per segment (0 = no limit)
+
+        // [EXPERIMENTAL] speed-up techniques
+        bool speed_up;  // speed-up the audio by 2x using Phase Vocoder
+        int  audio_ctx; // overwrite the audio context size (0 = use default)
 
         const char * language;
 
