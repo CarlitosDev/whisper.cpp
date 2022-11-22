@@ -53,11 +53,13 @@ struct whisper_params {
     int32_t n_processors = 1;
     int32_t offset_t_ms  = 0;
     int32_t offset_n     = 0;
+    int32_t duration_ms  = 0;
     int32_t max_context  = -1;
     int32_t max_len      = 0;
 
     float word_thold = 0.01f;
 
+    bool speed_up             = false;
     bool verbose              = false;
     bool translate            = false;
     bool output_txt           = false;
@@ -95,12 +97,16 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
             params.offset_t_ms = std::stoi(argv[++i]);
         } else if (arg == "-on" || arg == "--offset-n") {
             params.offset_n = std::stoi(argv[++i]);
+        } else if (arg == "-d" || arg == "--duration") {
+            params.duration_ms = std::stoi(argv[++i]);
         } else if (arg == "-mc" || arg == "--max-context") {
             params.max_context = std::stoi(argv[++i]);
         } else if (arg == "-ml" || arg == "--max-len") {
             params.max_len = std::stoi(argv[++i]);
         } else if (arg == "-wt" || arg == "--word-thold") {
             params.word_thold = std::stof(argv[++i]);
+        } else if (arg == "-su" || arg == "--speed-up") {
+            params.speed_up = true;
         } else if (arg == "-v" || arg == "--verbose") {
             params.verbose = true;
         } else if (arg == "--translate") {
@@ -154,9 +160,11 @@ void whisper_print_usage(int argc, char ** argv, const whisper_params & params) 
     fprintf(stderr, "  -p N,     --processors N   number of processors to use during computation (default: %d)\n", params.n_processors);
     fprintf(stderr, "  -ot N,    --offset-t N     time offset in milliseconds (default: %d)\n", params.offset_t_ms);
     fprintf(stderr, "  -on N,    --offset-n N     segment index offset (default: %d)\n", params.offset_n);
+    fprintf(stderr, "  -d  N,    --duration N     duration of audio to process in milliseconds (default: %d)\n", params.duration_ms);
     fprintf(stderr, "  -mc N,    --max-context N  maximum number of text context tokens to store (default: max)\n");
     fprintf(stderr, "  -ml N,    --max-len N      maximum segment length in characters (default: %d)\n", params.max_len);
     fprintf(stderr, "  -wt N,    --word-thold N   word timestamp probability threshold (default: %f)\n", params.word_thold);
+    fprintf(stderr, "  -su,      --speed-up       speed up audio by factor of 2 (faster processing, reduced accuracy, default: %s)\n", params.speed_up ? "true" : "false");
     fprintf(stderr, "  -v,       --verbose        verbose output\n");
     fprintf(stderr, "            --translate      translate from source language to english\n");
     fprintf(stderr, "  -otxt,    --output-txt     output result in a text file\n");
@@ -313,7 +321,7 @@ bool output_wts(struct whisper_context * ctx, const char * fname, const char * f
     // TODO: become parameter
     static const char * font = "/System/Library/Fonts/Supplemental/Courier New Bold.ttf";
 
-    fout << "!/bin/bash" << "\n";
+    fout << "#!/bin/bash" << "\n";
     fout << "\n";
 
     fout << "ffmpeg -i " << fname_inp << " -f lavfi -i color=size=1200x120:duration=" << t_sec << ":rate=25:color=black -vf \"";
@@ -450,9 +458,30 @@ int main(int argc, char ** argv) {
         std::vector<float> pcmf32;
         {
             drwav wav;
-            if (!drwav_init_file(&wav, fname_inp.c_str(), NULL)) {
-                fprintf(stderr, "%s: failed to open WAV file '%s' - check your input\n", argv[0], fname_inp.c_str());
-                whisper_print_usage(argc, argv, {});
+
+            if (fname_inp == "-") {
+                std::vector<uint8_t> wav_data;
+                {
+                    uint8_t buf[1024];
+                    while (true)
+                    {
+                        const size_t n = fread(buf, 1, sizeof(buf), stdin);
+                        if (n == 0)
+                        {
+                            break;
+                        }
+                        wav_data.insert(wav_data.end(), buf, buf + n);
+                    }
+                }
+
+                if (drwav_init_memory(&wav, wav_data.data(), wav_data.size(), NULL) == false)
+                {
+                    fprintf(stderr, "error: failed to open WAV file from stdin\n");
+                    return 4;
+                }
+            }
+            else if (drwav_init_file(&wav, fname_inp.c_str(), NULL) == false) {
+                fprintf(stderr, "error: failed to open '%s' as WAV file\n", fname_inp.c_str());
                 return 4;
             }
 
@@ -532,10 +561,13 @@ int main(int argc, char ** argv) {
             wparams.n_threads            = params.n_threads;
             wparams.n_max_text_ctx       = params.max_context >= 0 ? params.max_context : wparams.n_max_text_ctx;
             wparams.offset_ms            = params.offset_t_ms;
+            wparams.duration_ms          = params.duration_ms;
 
             wparams.token_timestamps     = params.output_wts || params.max_len > 0;
             wparams.thold_pt             = params.word_thold;
             wparams.max_len              = params.output_wts && params.max_len == 0 ? 60 : params.max_len;
+
+            wparams.speed_up             = params.speed_up;
 
             // this callback is called on each new segment
             if (!wparams.print_realtime) {

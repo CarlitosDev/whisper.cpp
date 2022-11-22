@@ -40,6 +40,7 @@ std::string to_timestamp(int64_t t, bool comma = false) {
     return std::string(buf);
 }
 
+// helper function to replace substrings
 void replace_all(std::string & s, const std::string & search, const std::string & replace) {
     for (size_t pos = 0; ; pos += replace.length()) {
         pos = s.find(search, pos);
@@ -56,11 +57,13 @@ struct whisper_params {
     int32_t n_processors = 1;
     int32_t offset_t_ms  = 0;
     int32_t offset_n     = 0;
+    int32_t duration_ms  = 0;
     int32_t max_context  = -1;
     int32_t max_len      = 0;
 
     float word_thold = 0.01f;
 
+    bool speed_up             = false;
     bool verbose              = false;
     bool translate            = false;
     bool output_txt           = false;
@@ -74,7 +77,7 @@ struct whisper_params {
     bool stereo_speakers      = false;
 
     std::string language  = "en";
-    std::string model     = "models/ggml-medium.en.bin";
+    std::string model     = "models/ggml-base.en.bin";
 
     std::vector<std::string> fname_inp = {};
 };
@@ -100,12 +103,16 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
             params.offset_t_ms = std::stoi(argv[++i]);
         } else if (arg == "-on" || arg == "--offset-n") {
             params.offset_n = std::stoi(argv[++i]);
+        } else if (arg == "-d" || arg == "--duration") {
+            params.duration_ms = std::stoi(argv[++i]);
         } else if (arg == "-mc" || arg == "--max-context") {
             params.max_context = std::stoi(argv[++i]);
         } else if (arg == "-ml" || arg == "--max-len") {
             params.max_len = std::stoi(argv[++i]);
         } else if (arg == "-wt" || arg == "--word-thold") {
             params.word_thold = std::stof(argv[++i]);
+        } else if (arg == "-su" || arg == "--speed-up") {
+            params.speed_up = true;
         } else if (arg == "-v" || arg == "--verbose") {
             params.verbose = true;
         } else if (arg == "--translate") {
@@ -670,11 +677,13 @@ int run_whisper(std::string fname_inp,
         wparams.n_threads            = params.n_threads;
         wparams.n_max_text_ctx       = params.max_context >= 0 ? params.max_context : wparams.n_max_text_ctx;
         wparams.offset_ms            = params.offset_t_ms;
+        wparams.duration_ms          = params.duration_ms;
 
         wparams.token_timestamps     = params.output_wts || params.max_len > 0;
         wparams.thold_pt             = params.word_thold;
         wparams.max_len              = params.output_wts && params.max_len == 0 ? 60 : params.max_len;
 
+        wparams.speed_up             = params.speed_up;
         // this callback is called on each new segment
         if (!wparams.print_realtime) {
             wparams.new_segment_callback           = whisper_print_segment_callback;
@@ -778,6 +787,8 @@ int main(int argc, char ** argv){
                 fprintf(stderr, "%s detected as stereo FLAC file.\n", fname_inp.c_str());
                 fprintf(stderr, "Transcribing left channel\n");
                 int result_left = run_whisper(fname_inp + "_left",ctx,params,pcmf32_left);
+                whisper_print_timings(ctx);
+                whisper_free(ctx);
                 fprintf(stderr, "Transcribing right channel\n");
                 int result_right = run_whisper(fname_inp + "_right",ctx,params,pcmf32_right);
             }
