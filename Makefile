@@ -16,8 +16,8 @@ ifeq ($(UNAME_S),Darwin)
 	ifneq ($(UNAME_P),arm)
 		SYSCTL_M := $(shell sysctl -n hw.optional.arm64)
 		ifeq ($(SYSCTL_M),1)
-			UNAME_P := arm
-			UNAME_M := arm64
+			# UNAME_P := arm
+			# UNAME_M := arm64
 			warn := $(warning Your arch is announced as x86_64, but it seems to actually be ARM64. Not fixing that can lead to bad performance. For more info see: https://github.com/ggerganov/whisper.cpp/issues/66\#issuecomment-1282546789)
 		endif
 	endif
@@ -50,12 +50,24 @@ endif
 # TODO: probably these flags need to be tweaked on some architectures
 #       feel free to update the Makefile for your architecture and send a pull request or issue
 ifeq ($(UNAME_M),x86_64)
-	CFLAGS += -mavx -mavx2 -mfma -mf16c
+	CFLAGS += -mfma -mf16c
+	ifeq ($(UNAME_S),Darwin)
+		AVX1_M := $(shell sysctl machdep.cpu.features)
+		ifneq (,$(findstring AVX1.0,$(AVX1_M)))
+			CFLAGS += -mavx
+		endif
+		AVX2_M := $(shell sysctl machdep.cpu.leaf7_features)
+		ifneq (,$(findstring AVX2,$(AVX2_M)))
+			CFLAGS += -mavx2
+		endif
+	else
+		CFLAGS += -mavx -mavx2
+	endif
 endif
 ifeq ($(UNAME_M),amd64)
 	CFLAGS += -mavx -mavx2 -mfma -mf16c
 endif
-ifneq ($(filter arm%,$(UNAME_M)),)
+ifndef WHISPER_NO_ACCELERATE
 	# Mac M1 - include Accelerate framework
 	ifeq ($(UNAME_S),Darwin)
 		CFLAGS  += -DGGML_USE_ACCELERATE
@@ -77,18 +89,11 @@ ifneq ($(filter armv8%,$(UNAME_M)),)
 	CFLAGS += -mfp16-format=ieee -mno-unaligned-access
 endif
 
-#
-# Build library + main
-#
+default: main
 
-# main: examples/main/main.cpp ggml.o whisper.o
-# 	$(CXX) $(CXXFLAGS) examples/main/main.cpp whisper.o ggml.o -o main $(LDFLAGS)
-# 	./main -h
-
-# change the main to my stripped down version
-main: examples/whisperer/whisperer.cpp ggml.o whisper.o
-	$(CXX) $(CXXFLAGS) examples/whisperer/whisperer.cpp whisper.o ggml.o -o whisperer $(LDFLAGS)
-	./whisperer -h
+#
+# Build library
+#
 
 ggml.o: ggml.c ggml.h
 	$(CC)  $(CFLAGS)   -c ggml.c -o ggml.o
@@ -99,14 +104,25 @@ whisper.o: whisper.cpp whisper.h
 libwhisper.a: ggml.o whisper.o
 	$(AR) rcs libwhisper.a ggml.o whisper.o
 
+libwhisper.so: ggml.o whisper.o
+	$(CXX) $(CXXFLAGS) -shared -o libwhisper.so ggml.o whisper.o $(LDFLAGS)
+
 clean:
-	rm -f *.o main stream bench libwhisper.a
+	rm -f *.o main stream bench libwhisper.a libwhisper.so
 
 #
 # Examples
 #
 
 CC_SDL=`sdl2-config --cflags --libs`
+
+# main: examples/main/main.cpp ggml.o whisper.o
+# 	$(CXX) $(CXXFLAGS) examples/main/main.cpp ggml.o whisper.o -o main $(LDFLAGS)
+# 	./main -h
+main: examples/whisperer/whisperer.cpp ggml.o whisper.o
+	$(CXX) $(CXXFLAGS) examples/whisperer/whisperer.cpp whisper.o ggml.o -o whisperer $(LDFLAGS)
+	./whisperer -h
+
 
 stream: examples/stream/stream.cpp ggml.o whisper.o
 	$(CXX) $(CXXFLAGS) examples/stream/stream.cpp ggml.o whisper.o -o stream $(CC_SDL) $(LDFLAGS)

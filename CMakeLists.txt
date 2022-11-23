@@ -9,6 +9,11 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(WHISPER_STANDALONE ON)
     include(cmake/GitVars.cmake)
     include(cmake/BuildTypes.cmake)
+
+    # configure project version
+    if (EXISTS "${CMAKE_SOURCE_DIR}/bindings/ios/Makefile-tmpl")
+        configure_file(${CMAKE_SOURCE_DIR}/bindings/ios/Makefile-tmpl ${CMAKE_SOURCE_DIR}/bindings/ios/Makefile @ONLY)
+    endif()
 else()
     set(WHISPER_STANDALONE OFF)
 endif()
@@ -43,11 +48,13 @@ option(WHISPER_SUPPORT_SDL2            "whisper: support for libSDL2" OFF)
 
 if (APPLE)
     option(WHISPER_NO_ACCELERATE       "whisper: disable Accelerate framework" OFF)
+    option(WHISPER_NO_AVX              "whisper: disable AVX" OFF)
+    option(WHISPER_NO_AVX2             "whisper: disable AVX2" OFF)
 else()
     option(WHISPER_SUPPORT_OPENBLAS    "whisper: support for OpenBLAS" OFF)
 endif()
 
-option(WHISPER_PERF                    "whisper: enable perf timings"          OFF)
+option(WHISPER_PERF                    "whisper: enable perf timings" OFF)
 
 # sanitizers
 
@@ -138,17 +145,27 @@ if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "arm" OR ${CMAKE_SYSTEM_PROCESSOR} MATCHES
 else()
     message(STATUS "x86 detected")
     if (MSVC)
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /arch:AVX2")
-        set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /arch:AVX2")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX2")
+        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /arch:AVX2")
     else()
         if (EMSCRIPTEN)
             # we require support for WASM SIMD 128-bit
             set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -pthread -msimd128")
             set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread")
         else()
-            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx -mavx2 -mfma -mf16c")
+            if(NOT WHISPER_NO_AVX)
+                set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx")
+            endif()
+            if(NOT WHISPER_NO_AVX2)
+                set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx2")
+            endif()
+            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfma -mf16c")
         endif()
     endif()
+endif()
+
+if (WHISPER_PERF)
+    set(WHISPER_EXTRA_FLAGS ${WHISPER_EXTRA_FLAGS} -DGGML_PERF)
 endif()
 
 #
