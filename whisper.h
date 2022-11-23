@@ -208,6 +208,11 @@ extern "C" {
         bool speed_up;  // speed-up the audio by 2x using Phase Vocoder
         int  audio_ctx; // overwrite the audio context size (0 = use default)
 
+        // tokens to provide the whisper model as initial prompt
+        // these are prepended to any existing text context from a previous call
+        const whisper_token * prompt_tokens;
+        int prompt_n_tokens;
+
         const char * language;
 
         struct {

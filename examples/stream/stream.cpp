@@ -234,6 +234,7 @@ int main(int argc, char ** argv) {
     std::vector<float> pcmf32(n_samples_30s, 0.0f);
     std::vector<float> pcmf32_old;
 
+    std::vector<whisper_token> prompt_tokens;
     const int n_new_line = params.length_ms / params.step_ms - 1;
 
     // print some info about the processing
@@ -335,7 +336,7 @@ int main(int argc, char ** argv) {
             wparams.print_realtime       = false;
             wparams.print_timestamps     = !params.no_timestamps;
             wparams.translate            = params.translate;
-            wparams.no_context           = params.no_context;
+            wparams.no_context           = true;
             wparams.single_segment       = true;
             wparams.max_tokens           = params.max_tokens;
             wparams.language             = params.language.c_str();
@@ -343,6 +344,9 @@ int main(int argc, char ** argv) {
 
             wparams.audio_ctx            = params.audio_ctx;
             wparams.speed_up             = params.speed_up;
+
+            wparams.prompt_tokens        = params.no_context ? nullptr : prompt_tokens.data();
+            wparams.prompt_n_tokens      = params.no_context ? 0       : prompt_tokens.size();
 
             if (whisper_full(ctx, wparams, pcmf32.data(), pcmf32.size()) != 0) {
                 fprintf(stderr, "%s: failed to process audio\n", argv[0]);
@@ -393,6 +397,19 @@ int main(int argc, char ** argv) {
 
                 // keep part of the audio for next iteration to try to mitigate word boundary issues
                 pcmf32_old = std::vector<float>(pcmf32.end() - n_samples_keep, pcmf32.end());
+
+                // Add tokens of the last full length segment as the prompt
+                if (!params.no_context) {
+                    prompt_tokens.clear();
+
+                    const int n_segments = whisper_full_n_segments(ctx);
+                    for (int i = 0; i < n_segments; ++i) {
+                        const int token_count = whisper_full_n_tokens(ctx, i);
+                        for (int j = 0; j < token_count; ++j) {
+                            prompt_tokens.push_back(whisper_full_get_token_id(ctx, i, j));
+                        }
+                    }
+                }
             }
         }
     }

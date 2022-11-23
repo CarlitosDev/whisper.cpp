@@ -1042,7 +1042,7 @@ static bool whisper_model_load(const std::string & fname, whisper_context & wctx
 
             fin.read(reinterpret_cast<char *>(tensor->data), ggml_nbytes(tensor));
 
-            //printf("%24s - [%5d, %5d], type = %6s, %6.2f MB\n", name.data(), ne[0], ne[1], ftype == 0 ? "float" : "f16", ggml_nbytes(tensor)/1024.0/1024.0);
+            //printf("%48s - [%5d, %5d, %5d], type = %6s, %6.2f MB\n", name.data(), ne[0], ne[1], ne[2], ftype == 0 ? "float" : "f16", ggml_nbytes(tensor)/1024.0/1024.0);
             total_size += ggml_nbytes(tensor);
             model.n_loaded++;
         }
@@ -2412,6 +2412,9 @@ struct whisper_full_params whisper_full_default_params(enum whisper_sampling_str
                     /*.speed_up             =*/ false,
                     /*.audio_ctx            =*/ 0,
 
+                    /*.prompt_tokens        =*/ nullptr,
+                    /*.prompt_n_tokens      =*/ 0,
+
                     /*.language             =*/ "en",
 
                     /*.greedy               =*/ {
@@ -2454,6 +2457,9 @@ struct whisper_full_params whisper_full_default_params(enum whisper_sampling_str
 
                     /*.speed_up             =*/ false,
                     /*.audio_ctx            =*/ 0,
+
+                    /*.prompt_tokens        =*/ nullptr,
+                    /*.prompt_n_tokens      =*/ 0,
 
                     /*.language             =*/ "en",
 
@@ -2584,6 +2590,15 @@ int whisper_full(
         prompt_past.clear();
     }
 
+    // prepend the prompt tokens to the prompt_past
+    if (params.prompt_tokens && params.prompt_n_tokens > 0) {
+        // parse tokens from the pointer
+        for (int i = 0; i < params.prompt_n_tokens; i++) {
+            prompt_past.push_back(params.prompt_tokens[i]);
+        }
+        std::rotate(prompt_past.begin(), prompt_past.end() - params.prompt_n_tokens, prompt_past.end());
+    }
+
     // overwrite audio_ctx
     ctx->exp_n_audio_ctx = params.audio_ctx;
 
@@ -2693,7 +2708,7 @@ int whisper_full(
 
                 //{
                 //    const auto tt = token.pt > 0.10 ? ctx->vocab.id_to_token[token.tid] : "[?]";
-                //    printf("%s: %10s %6.3f '%s'\n", __func__, tt.c_str(), token.pt, ctx->vocab.id_to_token[token.id].c_str());
+                //    printf("%s: %10s %6d %6.3f '%s'\n", __func__, tt.c_str(), token.id, token.pt, ctx->vocab.id_to_token[token.id].c_str());
                 //}
 
                 // end of text token
