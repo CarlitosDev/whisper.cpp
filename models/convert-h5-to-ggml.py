@@ -1,3 +1,20 @@
+# Convert Hugging Face fine-tuned models to ggml format
+#
+# Usage:
+#
+#   git clone https://github.com/openai/whisper
+#   git clone https://github.com/ggerganov/whisper.cpp
+#   git clone https://huggingface.co/openai/whisper-medium
+#
+#   python3 ./whisper.cpp/models/convert-h5-to-ggml.py ./whisper-medium/ ./whisper .
+#
+# This script is similar to "convert-pt-to-ggml.py"
+#
+# For more info:
+#
+#   https://github.com/ggerganov/whisper.cpp/issues/157
+#
+
 import io
 import os
 import sys
@@ -9,26 +26,28 @@ import numpy as np
 
 from transformers import WhisperForConditionalGeneration
 
-conv_map = {'self_attn_layer_norm': 'attn_ln',
- 'encoder_attn.k_proj': 'attn.key',
- 'self_attn.out_proj': 'attn.out',
- 'encoder_attn.out_proj': 'cross_attn.out',
- 'self_attn.q_proj': 'attn.query',
- 'encoder_attn.q_proj': 'cross_attn.query',
- 'self_attn.v_proj': 'attn.value',
- 'encoder_attn.v_proj': 'cross_attn.value',
- 'encoder_attn_layer_norm': 'cross_attn_ln',
- 'fc1': 'mlp.0',
- 'fc2': 'mlp.2',
- 'final_layer_norm': 'mlp_ln',
- 'encoder.layer_norm.bias': 'encoder.ln_post.bias',
- 'encoder.layer_norm.weight': 'encoder.ln_post.weight',
- 'encoder.embed_positions.weight': 'encoder.positional_embedding',
- 'decoder.layer_norm.bias': 'decoder.ln.bias',
- 'decoder.layer_norm.weight': 'decoder.ln.weight',
- 'decoder.embed_positions.weight': 'decoder.positional_embedding',
- 'decoder.embed_tokens.weight': 'decoder.token_embedding.weight',
-}
+conv_map = {
+        'self_attn.k_proj'              : 'attn.key',
+        'self_attn.q_proj'              : 'attn.query',
+        'self_attn.v_proj'              : 'attn.value',
+        'self_attn.out_proj'            : 'attn.out',
+        'self_attn_layer_norm'          : 'attn_ln',
+        'encoder_attn.q_proj'           : 'cross_attn.query',
+        'encoder_attn.v_proj'           : 'cross_attn.value',
+        'encoder_attn.out_proj'         : 'cross_attn.out',
+        'encoder_attn_layer_norm'       : 'cross_attn_ln',
+        'fc1'                           : 'mlp.0',
+        'fc2'                           : 'mlp.2',
+        'final_layer_norm'              : 'mlp_ln',
+        'encoder.layer_norm.bias'       : 'encoder.ln_post.bias',
+        'encoder.layer_norm.weight'     : 'encoder.ln_post.weight',
+        'encoder.embed_positions.weight': 'encoder.positional_embedding',
+        'decoder.layer_norm.bias'       : 'decoder.ln.bias',
+        'decoder.layer_norm.weight'     : 'decoder.ln.weight',
+        'decoder.embed_positions.weight': 'decoder.positional_embedding',
+        'decoder.embed_tokens.weight'   : 'decoder.token_embedding.weight',
+        'proj_out.weight'               : 'decoder.proj.weight',
+        }
 
 # ref: https://github.com/openai/gpt-2/blob/master/src/encoder.py
 def bytes_to_unicode():
@@ -82,8 +101,11 @@ fname_out = dir_out + "/ggml-model.bin"
 with open(dir_tokenizer + "/vocab.json", "r", encoding="utf8") as f:
     tokens = json.load(f)
 
-
+# use 16-bit or 32-bit floats
 use_f16 = True
+if len(sys.argv) > 4:
+    use_f16 = False
+    fname_out = dir_out + "/ggml-model-f32.bin"
 
 fout = open(fname_out, "wb")
 
@@ -91,12 +113,12 @@ fout.write(struct.pack("i", 0x67676d6c)) # magic: ggml in hex
 fout.write(struct.pack("i", hparams["vocab_size"]))
 fout.write(struct.pack("i", hparams["max_source_positions"]))
 fout.write(struct.pack("i", hparams["d_model"]))
-fout.write(struct.pack("i", hparams["decoder_attention_heads"]))
-fout.write(struct.pack("i", hparams["decoder_layers"]))
-fout.write(struct.pack("i", hparams["max_length"]))
-fout.write(struct.pack("i", hparams["d_model"]))
 fout.write(struct.pack("i", hparams["encoder_attention_heads"]))
 fout.write(struct.pack("i", hparams["encoder_layers"]))
+fout.write(struct.pack("i", hparams["max_length"]))
+fout.write(struct.pack("i", hparams["d_model"]))
+fout.write(struct.pack("i", hparams["decoder_attention_heads"]))
+fout.write(struct.pack("i", hparams["decoder_layers"]))
 fout.write(struct.pack("i", hparams["num_mel_bins"]))
 fout.write(struct.pack("i", use_f16))
 
@@ -119,6 +141,8 @@ for key in tokens:
 
 list_vars = model.state_dict()
 for name in list_vars.keys():
+    # this seems to not be used
+    # ref: https://github.com/huggingface/transformers/blob/9a5b84a0076a04fe9596da72e8668069d4f09ea0/src/transformers/models/whisper/modeling_whisper.py#L1099-L1106
     if name == "proj_out.weight":
         print('Skipping', name)
         continue
@@ -126,10 +150,14 @@ for name in list_vars.keys():
     src = name
 
     nn = name
-    nn = nn.split(".")[1:]
+    if name != "proj_out.weight":
+        nn = nn.split(".")[1:]
+    else:
+        nn = nn.split(".")
+
     if nn[1] == "layers":
         nn[1] = "blocks"
-        if ".".join(nn[3:-1]) == "self_attn.k_proj":
+        if ".".join(nn[3:-1]) == "encoder_attn.k_proj":
             mapped = "attn.key" if nn[0] == "encoder" else "cross_attn.key"
         else:
             mapped = conv_map[".".join(nn[3:-1])]
