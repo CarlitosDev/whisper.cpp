@@ -20,19 +20,52 @@ Supported platforms:
 - [x] [iOS](examples/whisper.objc)
 - [x] Linux
 - [x] [WebAssembly](examples/whisper.wasm)
-- [x] [Windows (MSVC and MinGW)](https://github.com/ggerganov/whisper.cpp/issues/5)
-- [x] [Raspberry Pi](https://github.com/ggerganov/whisper.cpp/issues/7)
+- [x] Windows ([MSVC](https://github.com/ggerganov/whisper.cpp/blob/master/.github/workflows/build.yml#L117-L144) and [MinGW](https://github.com/ggerganov/whisper.cpp/issues/168)]
+- [x] [Raspberry Pi](https://github.com/ggerganov/whisper.cpp/discussions/166)
 - [x] [Android](https://github.com/ggerganov/whisper.cpp/issues/30)
 
 The entire implementation of the model is contained in 2 source files:
 
-- [ggml.h](ggml.h) / [ggml.c](ggml.c)
-- [whisper.h](whisper.h) / [whisper.cpp](whisper.cpp)
+- Tensor operations: [ggml.h](ggml.h) / [ggml.c](ggml.c)
+- Transformer inference: [whisper.h](whisper.h) / [whisper.cpp](whisper.cpp)
 
 Having such a lightweight implementation of the model allows to easily integrate it in different platforms and applications.
-As an example, here is a video of running the model on an iPhone 13 device - fully offline, on-device:
+As an example, here is a video of running the model on an iPhone 13 device - fully offline, on-device: [whisper.objc](examples/whisper.objc)
 
 https://user-images.githubusercontent.com/1991296/197385372-962a6dea-bca1-4d50-bf96-1d8c27b98c81.mp4
+
+You can also easily make your own offline voice assistant application: [command](examples/command)
+
+https://user-images.githubusercontent.com/1991296/204038393-2f846eae-c255-4099-a76d-5735c25c49da.mp4
+
+Or you can even run it straight in the browser: [talk.wasm](examples/talk.wasm)
+
+## Implementation details
+
+- The core tensor operations are implemented in C ([ggml.h](ggml.h) / [ggml.c](ggml.c))
+- The transformer model and the high-level C-style API are implemented in C++ ([whisper.h](whisper.h) / [whisper.cpp](whisper.cpp))
+- Sample usage is demonstrated in [main.cpp](examples/main)
+- Sample real-time audio transcription from the microphone is demonstrated in [stream.cpp](examples/stream)
+- Various other examples are available in the [examples](examples) folder
+
+The tensor operators are optimized heavily for Apple silicon CPUs. Depending on the computation size, Arm Neon SIMD
+instrisics or CBLAS Accelerate framework routines are used. The latter are especially effective for bigger sizes since
+the Accelerate framework utilizes the special-purpose AMX coprocessor available in modern Apple products.
+
+## Limitations
+
+- Inference only
+- No GPU support
+- Very basic greedy sampling scheme - always pick up the token with highest probability.
+  This should be similar to the [GreedyDecoder](https://github.com/openai/whisper/blob/main/whisper/decoding.py#L249-L274)
+  from the original python implementation, so in order to make a fair comparison between the 2 implementations, make sure
+  to run the python code with the following parameters:
+
+  ```
+  whisper --best_of None --beam_size None ...
+  ```
+
+  In the future, `whisper.cpp` will support more sampling strategies.
 
 ## Quick start
 
@@ -59,38 +92,39 @@ For a quick demo, simply run `make base.en`:
 ```java
 $ make base.en
 
-cc  -I.              -O3 -std=c11   -pthread -DGGML_USE_ACCELERATE   -c ggml.c
-c++ -I. -I./examples -O3 -std=c++11 -pthread -c whisper.cpp
+cc  -I.              -O3 -std=c11   -pthread -DGGML_USE_ACCELERATE   -c ggml.c -o ggml.o
+c++ -I. -I./examples -O3 -std=c++11 -pthread -c whisper.cpp -o whisper.o
 c++ -I. -I./examples -O3 -std=c++11 -pthread examples/main/main.cpp whisper.o ggml.o -o main  -framework Accelerate
 ./main -h
 
 usage: ./main [options] file0.wav file1.wav ...
 
 options:
-  -h,       --help           show this help message and exit
-  -s SEED,  --seed SEED      RNG seed (default: -1)
-  -t N,     --threads N      number of threads to use during computation (default: 4)
-  -ot N,    --offset-t N     time offset in milliseconds (default: 0)
-  -on N,    --offset-n N     segment index offset (default: 0)
-  -mc N,    --max-context N  maximum number of text context tokens to store (default: max)
-  -ml N,    --max-len N      maximum segment length in characters (default: 0)
-  -wt N,    --word-thold N   word timestamp probability threshold (default: 0.010000)
-  -v,       --verbose        verbose output
-            --translate      translate from source language to english
-  -otxt,    --output-txt     output result in a text file
-  -ovtt,    --output-vtt     output result in a vtt file
-  -osrt,    --output-srt     output result in a srt file
-  -owts,    --output-words   output script for generating karaoke video
-  -ps,      --print_special  print special tokens
-  -pc,      --print_colors   print colors
-  -nt,      --no_timestamps  do not print timestamps
-  -l LANG,  --language LANG  spoken language (default: en)
-  -m FNAME, --model FNAME    model path (default: models/ggml-base.en.bin)
-  -f FNAME, --file FNAME     input WAV file path
+  -h,       --help          [default] show this help message and exit
+  -t N,     --threads N     [4      ] number of threads to use during computation
+  -p N,     --processors N  [1      ] number of processors to use during computation
+  -ot N,    --offset-t N    [0      ] time offset in milliseconds
+  -on N,    --offset-n N    [0      ] segment index offset
+  -d  N,    --duration N    [0      ] duration of audio to process in milliseconds
+  -mc N,    --max-context N [-1     ] maximum number of text context tokens to store
+  -ml N,    --max-len N     [0      ] maximum segment length in characters
+  -wt N,    --word-thold N  [0.01   ] word timestamp probability threshold
+  -su,      --speed-up      [false  ] speed up audio by x2 (reduced accuracy)
+  -tr,      --translate     [false  ] translate from source language to english
+  -otxt,    --output-txt    [false  ] output result in a text file
+  -ovtt,    --output-vtt    [false  ] output result in a vtt file
+  -osrt,    --output-srt    [false  ] output result in a srt file
+  -owts,    --output-words  [false  ] output script for generating karaoke video
+  -ps,      --print-special [false  ] print special tokens
+  -pc,      --print-colors  [false  ] print colors
+  -nt,      --no-timestamps [true   ] do not print timestamps
+  -l LANG,  --language LANG [en     ] spoken language
+  -m FNAME, --model FNAME   [models/ggml-base.en.bin] model path
+  -f FNAME, --file FNAME    [       ] input WAV file path
 
 bash ./models/download-ggml-model.sh base.en
 Downloading ggml model base.en ...
-ggml-base.en.bin               100%[========================>] 141.11M  6.34MB/s    in 24s     
+ggml-base.en.bin               100%[========================>] 141.11M  6.34MB/s    in 24s
 Done! Model 'base.en' saved in 'models/ggml-base.en.bin'
 You can now use it like this:
 
@@ -118,23 +152,26 @@ whisper_model_load: n_text_layer  = 6
 whisper_model_load: n_mels        = 80
 whisper_model_load: f16           = 1
 whisper_model_load: type          = 2
-whisper_model_load: mem_required  = 505.00 MB
 whisper_model_load: adding 1607 extra tokens
-whisper_model_load: ggml ctx size = 163.43 MB
-whisper_model_load: memory size =    22.83 MB
-whisper_model_load: model size  =   140.54 MB
+whisper_model_load: mem_required  =  506.00 MB
+whisper_model_load: ggml ctx size =  140.60 MB
+whisper_model_load: memory size   =   22.83 MB
+whisper_model_load: model size    =  140.54 MB
 
-main: processing 'samples/jfk.wav' (176000 samples, 11.0 sec), 4 threads, lang = en, task = transcribe, timestamps = 1 ...
+system_info: n_threads = 4 / 10 | AVX = 0 | AVX2 = 0 | AVX512 = 0 | NEON = 1 | FP16_VA = 1 | WASM_SIMD = 0 | BLAS = 1 |
 
-[00:00.000 --> 00:11.000]   And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country.
+main: processing 'samples/jfk.wav' (176000 samples, 11.0 sec), 4 threads, 1 processors, lang = en, task = transcribe, timestamps = 1 ...
 
 
-whisper_print_timings:     load time =    87.21 ms
-whisper_print_timings:      mel time =    24.26 ms
-whisper_print_timings:   sample time =     3.87 ms
-whisper_print_timings:   encode time =   323.67 ms / 53.94 ms per layer
-whisper_print_timings:   decode time =    83.25 ms / 13.87 ms per layer
-whisper_print_timings:    total time =   522.66 ms
+[00:00:00.000 --> 00:00:11.000]   And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country.
+
+
+whisper_print_timings:     load time =   105.91 ms
+whisper_print_timings:      mel time =    24.62 ms
+whisper_print_timings:   sample time =     3.63 ms
+whisper_print_timings:   encode time =   324.71 ms / 54.12 ms per layer
+whisper_print_timings:   decode time =    83.58 ms / 13.93 ms per layer
+whisper_print_timings:    total time =   542.81 ms
 ```
 
 The command downloads the `base.en` model converted to custom `ggml` format and runs the inference on all `.wav` samples in the folder `samples`.
@@ -176,8 +213,8 @@ make large
 
 | Model  | Disk   | Mem     | SHA                                        |
 | ---    | ---    | ---     | ---                                        |
-| tiny   |  75 MB | ~280 MB | `bd577a113a864445d4c299885e0cb97d4ba92b5f` |
-| base   | 142 MB | ~430 MB | `465707469ff3a37a2b9b8d8f89f2f99de7299dac` |
+| tiny   |  75 MB | ~390 MB | `bd577a113a864445d4c299885e0cb97d4ba92b5f` |
+| base   | 142 MB | ~500 MB | `465707469ff3a37a2b9b8d8f89f2f99de7299dac` |
 | small  | 466 MB | ~1.0 GB | `55356645c2b361a969dfd0ef2c5a50d530afd8d5` |
 | medium | 1.5 GB | ~2.6 GB | `fd9727b6e1217c2f614f9b698455c4ffd82463b4` |
 | large  | 2.9 GB | ~4.7 GB | `b1caaf735c4cc1429223d5a74f0f4d0b9b59a299` |
@@ -189,7 +226,7 @@ in about half a minute on a MacBook M1 Pro, using `medium.en` model:
 
 <details>
   <summary>Expand to see the result</summary>
-  
+
 ```java
 $ ./main -m models/ggml-medium.en.bin -f samples/gb1.wav -t 8
 
@@ -277,12 +314,76 @@ to highlight words with high or low confidence:
 
 <img width="965" alt="image" src="https://user-images.githubusercontent.com/1991296/197356445-311c8643-9397-4e5e-b46e-0b4b4daa2530.png">
 
-## Word-level timestamps (experimental)
+## Controlling the length of the generated text segments (experimental)
 
-The [main](examples/main) example has experimental support for word-level timestamp generation. The accuracy
-is not great, but might be improved in the future.
+For example, to limit the line length to a maximum of 16 characters, simply add `-ml 16`: 
 
-To use it, simply add the `-owts` command-line argument. There is a free parameter `-wt` that should be around `0.01`.
+```java
+./main -m ./models/ggml-base.en.bin -f ./samples/jfk.wav -ml 16
+
+whisper_model_load: loading model from './models/ggml-base.en.bin'
+...
+system_info: n_threads = 4 / 10 | AVX2 = 0 | AVX512 = 0 | NEON = 1 | FP16_VA = 1 | WASM_SIMD = 0 | BLAS = 1 | 
+
+main: processing './samples/jfk.wav' (176000 samples, 11.0 sec), 4 threads, 1 processors, lang = en, task = transcribe, timestamps = 1 ...
+
+[00:00:00.000 --> 00:00:00.850]   And so my
+[00:00:00.850 --> 00:00:01.590]   fellow
+[00:00:01.590 --> 00:00:04.140]   Americans, ask
+[00:00:04.140 --> 00:00:05.660]   not what your
+[00:00:05.660 --> 00:00:06.840]   country can do
+[00:00:06.840 --> 00:00:08.430]   for you, ask
+[00:00:08.430 --> 00:00:09.440]   what you can do
+[00:00:09.440 --> 00:00:10.020]   for your
+[00:00:10.020 --> 00:00:11.000]   country.
+```
+
+## Word-level timestamp
+
+The `--max-len` argument can be used to obtain word-level timestamps. Simply use `-ml 1`:
+
+```java
+./main -m ./models/ggml-base.en.bin -f ./samples/jfk.wav -ml 1
+
+whisper_model_load: loading model from './models/ggml-base.en.bin'
+...
+system_info: n_threads = 4 / 10 | AVX2 = 0 | AVX512 = 0 | NEON = 1 | FP16_VA = 1 | WASM_SIMD = 0 | BLAS = 1 | 
+
+main: processing './samples/jfk.wav' (176000 samples, 11.0 sec), 4 threads, 1 processors, lang = en, task = transcribe, timestamps = 1 ...
+
+[00:00:00.000 --> 00:00:00.320]  
+[00:00:00.320 --> 00:00:00.370]   And
+[00:00:00.370 --> 00:00:00.690]   so
+[00:00:00.690 --> 00:00:00.850]   my
+[00:00:00.850 --> 00:00:01.590]   fellow
+[00:00:01.590 --> 00:00:02.850]   Americans
+[00:00:02.850 --> 00:00:03.300]  ,
+[00:00:03.300 --> 00:00:04.140]   ask
+[00:00:04.140 --> 00:00:04.990]   not
+[00:00:04.990 --> 00:00:05.410]   what
+[00:00:05.410 --> 00:00:05.660]   your
+[00:00:05.660 --> 00:00:06.260]   country
+[00:00:06.260 --> 00:00:06.600]   can
+[00:00:06.600 --> 00:00:06.840]   do
+[00:00:06.840 --> 00:00:07.010]   for
+[00:00:07.010 --> 00:00:08.170]   you
+[00:00:08.170 --> 00:00:08.190]  ,
+[00:00:08.190 --> 00:00:08.430]   ask
+[00:00:08.430 --> 00:00:08.910]   what
+[00:00:08.910 --> 00:00:09.040]   you
+[00:00:09.040 --> 00:00:09.320]   can
+[00:00:09.320 --> 00:00:09.440]   do
+[00:00:09.440 --> 00:00:09.760]   for
+[00:00:09.760 --> 00:00:10.020]   your
+[00:00:10.020 --> 00:00:10.510]   country
+[00:00:10.510 --> 00:00:11.000]  .
+```
+
+## Karaoke-style movie generation (experimental)
+
+The [main](examples/main) example provides support for output of karaoke-style movies, where the
+currently pronounced word is highlighted. Use the `-wts` argument and run the generated bash script.
+This requires to have `ffmpeg` installed.
 
 Here are a few *"typical"* examples:
 
@@ -316,33 +417,6 @@ https://user-images.githubusercontent.com/1991296/199337538-b7b0c7a3-2753-4a88-a
 
 ---
 
-## Implementation details
-
-- The core tensor operations are implemented in C ([ggml.h](ggml.h) / [ggml.c](ggml.c))
-- The high-level C-style API is implemented in C++ ([whisper.h](whisper.h) / [whisper.cpp](whisper.cpp))
-- Sample usage is demonstrated in [main.cpp](examples/main)
-- Sample real-time audio transcription from the microphone is demonstrated in [stream.cpp](examples/stream)
-- Various other examples are available in the [examples](examples) folder
-
-The tensor operators are optimized heavily for Apple silicon CPUs. Depending on the computation size, Arm Neon SIMD
-instrisics or CBLAS Accelerate framework routines are used. The latter are especially effective for bigger sizes since
-the Accelerate framework utilizes the special-purpose AMX coprocessor available in modern Apple products.
-
-## Limitations
-
-- Inference only
-- No GPU support
-- Very basic greedy sampling scheme - always pick up the token with highest probability.
-  This should be similar to the [GreedyDecoder](https://github.com/openai/whisper/blob/main/whisper/decoding.py#L249-L274)
-  from the original python implementation, so in order to make a fair comparison between the 2 implementations, make sure
-  to run the python code with the following parameters:
-
-  ```
-  whisper --best_of None --beam_size None ...
-  ```
-
-  In the future, `whisper.cpp` will support more sampling strategies.
-
 ## Benchmarks
 
 In order to have an objective comparison of the performance of the inference across different system configurations,
@@ -360,18 +434,43 @@ The original models are converted to a custom binary format. This allows to pack
 - vocabulary
 - weights
 
-You can download the converted models using the [models/download-ggml-model.sh](models/download-ggml-model.sh) script or from here:
+You can download the converted models using the [models/download-ggml-model.sh](models/download-ggml-model.sh) script
+or manually from here:
 
-https://ggml.ggerganov.com
+- https://huggingface.co/datasets/ggerganov/whisper.cpp
+- https://ggml.ggerganov.com
 
-For more details, see the conversion script [models/convert-pt-to-ggml.py](models/convert-pt-to-ggml.py) or the README in [models](models).
+For more details, see the conversion script [models/convert-pt-to-ggml.py](models/convert-pt-to-ggml.py) or the README
+in [models](models).
 
 ## Bindings
 
 - [X] Rust: [tazz4843/whisper-rs](https://github.com/tazz4843/whisper-rs)
+- [X] Objective-C / Swift: [ggerganov/whisper.spm](https://github.com/ggerganov/whisper.spm)
 - [ ] Python:
 - [ ] Java:
 
 ## Examples
 
-There are various examples of using the library for different projects in the [examples](examples) folder. Check them out!
+There are various examples of using the library for different projects in the [examples](examples) folder.
+Some of the examples are even ported to run in the browser using WebAssembly. Check them out!
+
+| Example | Web | Description |
+| ---     | --- | ---         |
+| [main](examples/main) | [whisper.wasm](examples/whisper.wasm) | Tool for translating and transcribing audio using Whisper |
+| [bench](examples/bench) | | Benchmark the performance of Whisper on your machine |
+| [stream](examples/stream) | [stream.wasm](examples/stream.wasm) | Real-time transcription of raw microphone capture |
+| [command](examples/command) | [command.wasm](examples/command.wasm) | Basic voice assistant example for receiving voice commands from the mic |
+| | [talk.wasm](examples/talk.wasm) | Talk with a GPT-2 bot in your browser |
+| [whisper.objc](examples/whisper.objc) | | iOS mobile application using whisper.cpp |
+| [whisper.nvim](examples/whisper.nvim) | | Speech-to-text plugin for Neovim |
+| [generate-karaoke.sh](examples/generate-karaoke.sh) | | Helper script to easily [generate a karaoke video](https://youtu.be/uj7hVta4blM) of raw audio capture |
+| [livestream.sh](examples/livestream.sh) | | [Livestream audio transcription](https://github.com/ggerganov/whisper.cpp/issues/185) |
+| [yt-wsp.sh](examples/yt-wsp.sh) | | Download + transcribe and/or translate any VOD [(original)](https://gist.github.com/DaniruKun/96f763ec1a037cc92fe1a059b643b818) |
+
+## [Discussions](https://github.com/ggerganov/whisper.cpp/discussions)
+
+If you have any kind of feedback about this project feel free to use the Discussions section and open a new topic.
+You can use the [Show and tell](https://github.com/ggerganov/whisper.cpp/discussions/categories/show-and-tell) category
+to share your own projects that use `whisper.cpp`. If you have a question, make sure to check the
+[Frequently asked questions (#126)](https://github.com/ggerganov/whisper.cpp/discussions/126) discussion.
