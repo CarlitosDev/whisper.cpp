@@ -13,12 +13,24 @@ fi
 models=( "tiny" "base" "small" "medium" "large" )
 
 printf "\n"
+printf "Running memcpy benchmark with 1 thread\n"
+printf "\n"
+
+./bench -w 1 -t 1 2>&1
+
+printf "\n"
+printf "Running ggml_mul_mat benchmark with $n_threads threads\n"
+printf "\n"
+
+./bench -w 2 -t $n_threads 2>&1
+
+printf "\n"
 printf "Running benchmark for all models\n"
 printf "This can take a while!\n"
 printf "\n"
 
-printf "| CPU | OS | Config | Model | Threads | Load [ms] | Encode [ms] |\n"
-printf "| --- | -- | ------ | ----- | ------- | --------- | ----------- |\n"
+printf "| CPU | OS | Config | Model | Th | Load | Enc. | Commit |\n"
+printf "| --- | -- | ------ | ----- | -- | ---- | ---- | ------ |\n"
 
 for model in "${models[@]}"; do
     # run once to heat-up the cache
@@ -34,6 +46,10 @@ for model in "${models[@]}"; do
     system_info=$(echo "$output" | grep "system_info")
     n_threads=$(echo "$output" | grep "system_info" | awk '{print $4}')
 
+    # floor to milliseconds
+    load_time=${load_time%.*}
+    encode_time=${encode_time%.*}
+
     config=""
 
     if [[ $system_info == *"AVX2 = 1"* ]]; then
@@ -48,6 +64,7 @@ for model in "${models[@]}"; do
         config="$config BLAS"
     fi
 
-    printf "| <todo> | <todo> | $config | $model | $n_threads | $load_time | $encode_time |\n"
-done
+    commit=$(git rev-parse --short HEAD)
 
+    printf "| <todo> | <todo> | $config | $model | $n_threads | $load_time | $encode_time | $commit |\n"
+done

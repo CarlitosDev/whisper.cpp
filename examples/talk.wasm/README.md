@@ -6,6 +6,8 @@ Talk with an Artificial Intelligence in your browser:
 
 Online demo: https://whisper.ggerganov.com/talk/
 
+Terminal version: [examples/talk](/examples/talk)
+
 ## How it works?
 
 This demo leverages 2 modern neural network models to create a high-quality voice chat directly in your browser:
@@ -34,7 +36,7 @@ In order to run this demo efficiently, you need to have the following:
 - Latest Chrome or Firefox browser (Safari is not supported)
 - Run this on a desktop or laptop with modern CPU (a mobile phone will likely not be good enough)
 - Speak phrases that are no longer than 10 seconds - this is the audio context of the AI
-- The web-page uses about 1.6GB of RAM
+- The web-page uses about 1.8GB of RAM
 
 Notice that this demo is using the smallest GPT-2 model, so the generated text responses are not always very good.
 Also, the prompting strategy can likely be improved to achieve better results.

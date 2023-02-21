@@ -10,6 +10,9 @@ ifndef UNAME_M
 UNAME_M := $(shell uname -m)
 endif
 
+CCV := $(shell $(CC) --version | head -n 1)
+CXXV := $(shell $(CXX) --version | head -n 1)
+
 # Mac OS + Arm can report x86_64
 # ref: https://github.com/ggerganov/whisper.cpp/issues/66#issuecomment-1282546789
 ifeq ($(UNAME_S),Darwin)
@@ -27,8 +30,8 @@ endif
 # Compile flags
 #
 
-CFLAGS   = -I.              -O3 -std=c11  
-CXXFLAGS = -I. -I./examples -O3 -std=c++11
+CFLAGS   = -I.              -O3 -std=c11   -fPIC
+CXXFLAGS = -I. -I./examples -O3 -std=c++11 -fPIC
 LDFLAGS  =
 
 # OS specific
@@ -45,14 +48,21 @@ ifeq ($(UNAME_S),FreeBSD)
 	CFLAGS   += -pthread
 	CXXFLAGS += -pthread
 endif
+ifeq ($(UNAME_S),Haiku)
+	CFLAGS   += -pthread
+	CXXFLAGS += -pthread
+endif
 
 # Architecture specific
 # TODO: probably these flags need to be tweaked on some architectures
 #       feel free to update the Makefile for your architecture and send a pull request or issue
-ifeq ($(UNAME_M),x86_64)
+ifeq ($(UNAME_M),$(filter $(UNAME_M),x86_64 i686))
 	ifeq ($(UNAME_S),Darwin)
-		CFLAGS += -mfma -mf16c
+		CFLAGS += -mf16c
 		AVX1_M := $(shell sysctl machdep.cpu.features)
+		ifneq (,$(findstring FMA,$(AVX1_M)))
+			CFLAGS += -mfma
+		endif
 		ifneq (,$(findstring AVX1.0,$(AVX1_M)))
 			CFLAGS += -mavx
 		endif
@@ -77,12 +87,43 @@ ifeq ($(UNAME_M),x86_64)
 		ifneq (,$(findstring f16c,$(F16C_M)))
 			CFLAGS += -mf16c
 		endif
+		SSE3_M := $(shell grep "sse3 " /proc/cpuinfo)
+		ifneq (,$(findstring sse3,$(SSE3_M)))
+			CFLAGS += -msse3
+		endif
+	else ifeq ($(UNAME_S),Haiku)
+		AVX1_M := $(shell sysinfo -cpu | grep "AVX ")
+		ifneq (,$(findstring avx,$(AVX1_M)))
+			CFLAGS += -mavx
+		endif
+		AVX2_M := $(shell sysinfo -cpu | grep "AVX2 ")
+		ifneq (,$(findstring avx2,$(AVX2_M)))
+			CFLAGS += -mavx2
+		endif
+		FMA_M := $(shell sysinfo -cpu | grep "FMA ")
+		ifneq (,$(findstring fma,$(FMA_M)))
+			CFLAGS += -mfma
+		endif
+		F16C_M := $(shell sysinfo -cpu | grep "F16C ")
+		ifneq (,$(findstring f16c,$(F16C_M)))
+			CFLAGS += -mf16c
+		endif
 	else
 		CFLAGS += -mfma -mf16c -mavx -mavx2
 	endif
 endif
 ifeq ($(UNAME_M),amd64)
 	CFLAGS += -mavx -mavx2 -mfma -mf16c
+endif
+ifneq ($(filter ppc64%,$(UNAME_M)),)
+	POWER9_M := $(shell grep "POWER9" /proc/cpuinfo)
+	ifneq (,$(findstring POWER9,$(POWER9_M)))
+		CFLAGS += -mpower9-vector
+	endif
+	# Require c++23's std::byteswap for big-endian support.
+	ifeq ($(UNAME_M),ppc64)
+		CXXFLAGS += -std=c++23 -DGGML_BIG_ENDIAN
+	endif
 endif
 ifndef WHISPER_NO_ACCELERATE
 	# Mac M1 - include Accelerate framework
@@ -96,8 +137,8 @@ ifdef WHISPER_OPENBLAS
 	LDFLAGS += -lopenblas
 endif
 ifdef WHISPER_GPROF
-	CFLAGS  += -pg
-	CXXFLAGS  += -pg
+	CFLAGS   += -pg
+	CXXFLAGS += -pg
 endif
 ifneq ($(filter aarch64%,$(UNAME_M)),)
 endif
@@ -113,6 +154,21 @@ ifneq ($(filter armv8%,$(UNAME_M)),)
 	# Raspberry Pi 4
 	CFLAGS += -mfp16-format=ieee -mno-unaligned-access
 endif
+
+#
+# Print build information
+#
+
+$(info I whisper.cpp build info: )
+$(info I UNAME_S:  $(UNAME_S))
+$(info I UNAME_P:  $(UNAME_P))
+$(info I UNAME_M:  $(UNAME_M))
+$(info I CFLAGS:   $(CFLAGS))
+$(info I CXXFLAGS: $(CXXFLAGS))
+$(info I LDFLAGS:  $(LDFLAGS))
+$(info I CC:       $(CCV))
+$(info I CXX:      $(CXXV))
+$(info )
 
 default: main
 
@@ -133,7 +189,7 @@ libwhisper.so: ggml.o whisper.o
 	$(CXX) $(CXXFLAGS) -shared -o libwhisper.so ggml.o whisper.o $(LDFLAGS)
 
 clean:
-	rm -f *.o main stream command bench libwhisper.a libwhisper.so
+	rm -f *.o main stream command talk bench libwhisper.a libwhisper.so
 
 #
 # Examples
@@ -141,15 +197,21 @@ clean:
 
 CC_SDL=`sdl2-config --cflags --libs`
 
-main: examples/main/main.cpp ggml.o whisper.o
-	$(CXX) $(CXXFLAGS) examples/main/main.cpp ggml.o whisper.o -o main $(LDFLAGS)
+SRC_COMMON = examples/common.cpp
+SRC_COMMON_SDL = examples/common-sdl.cpp
+
+main: examples/main/main.cpp $(SRC_COMMON) ggml.o whisper.o
+	$(CXX) $(CXXFLAGS) examples/main/main.cpp $(SRC_COMMON) ggml.o whisper.o -o main $(LDFLAGS)
 	./main -h
 
-stream: examples/stream/stream.cpp ggml.o whisper.o
-	$(CXX) $(CXXFLAGS) examples/stream/stream.cpp ggml.o whisper.o -o stream $(CC_SDL) $(LDFLAGS)
+stream: examples/stream/stream.cpp $(SRC_COMMON) $(SRC_COMMON_SDL) ggml.o whisper.o
+	$(CXX) $(CXXFLAGS) examples/stream/stream.cpp $(SRC_COMMON) $(SRC_COMMON_SDL) ggml.o whisper.o -o stream $(CC_SDL) $(LDFLAGS)
 
-command: examples/command/command.cpp ggml.o whisper.o
-	$(CXX) $(CXXFLAGS) examples/command/command.cpp ggml.o whisper.o -o command $(CC_SDL) $(LDFLAGS)
+command: examples/command/command.cpp $(SRC_COMMON) $(SRC_COMMON_SDL) ggml.o whisper.o
+	$(CXX) $(CXXFLAGS) examples/command/command.cpp $(SRC_COMMON) $(SRC_COMMON_SDL) ggml.o whisper.o -o command $(CC_SDL) $(LDFLAGS)
+
+talk: examples/talk/talk.cpp examples/talk/gpt-2.cpp $(SRC_COMMON) $(SRC_COMMON_SDL) ggml.o whisper.o
+	$(CXX) $(CXXFLAGS) examples/talk/talk.cpp examples/talk/gpt-2.cpp $(SRC_COMMON) $(SRC_COMMON_SDL) ggml.o whisper.o -o talk $(CC_SDL) $(LDFLAGS)
 
 bench: examples/bench/bench.cpp ggml.o whisper.o
 	$(CXX) $(CXXFLAGS) examples/bench/bench.cpp ggml.o whisper.o -o bench $(LDFLAGS)
@@ -189,9 +251,10 @@ samples:
 .PHONY: small
 .PHONY: medium.en
 .PHONY: medium
+.PHONY: large-v1
 .PHONY: large
 
-tiny.en tiny base.en base small.en small medium.en medium large: main
+tiny.en tiny base.en base small.en small medium.en medium large-v1 large: main
 	bash ./models/download-ggml-model.sh $@
 	@echo ""
 	@echo "==============================================="

@@ -1,4 +1,5 @@
 *.o
+*.a
 .cache/
 .vs/
 .vscode/
@@ -8,17 +9,25 @@ build/
 build-em/
 build-debug/
 build-release/
+build-static/
 build-sanitize-addr/
 build-sanitize-thread/
 
-main
-stream
-command
-bench
+/main
+/stream
+/command
+/talk
+/bench
+
+arm_neon.h
 sync.sh
+libwhisper.a
+libwhisper.so
 compile_commands.json
 
 examples/arm_neon.h
 examples/whisper.objc/whisper.objc.xcodeproj/xcshareddata
 examples/whisper.objc/whisper.objc.xcodeproj/xcuserdata/
 examples/whisper.objc/whisper.objc.xcodeproj/project.xcworkspace/xcuserdata
+
+extra/bench-gg.txt

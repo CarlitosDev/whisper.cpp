@@ -301,6 +301,13 @@ struct ggml_cgraph {
     int64_t perf_time_us;
 };
 
+// scratch buffer
+struct ggml_scratch {
+    size_t offs;
+    size_t size;
+    void * data;
+};
+
 struct ggml_init_params {
     // memory pool
     size_t mem_size;   // bytes
@@ -326,6 +333,8 @@ struct ggml_context * ggml_init(struct ggml_init_params params);
 void ggml_free(struct ggml_context * ctx);
 
 size_t ggml_used_mem(const struct ggml_context * ctx);
+
+size_t ggml_set_scratch(struct ggml_context * ctx, struct ggml_scratch scratch);
 
 struct ggml_tensor * ggml_new_tensor(
         struct ggml_context * ctx,
@@ -681,34 +690,32 @@ struct ggml_opt_params {
     bool print_forward_graph;
     bool print_backward_graph;
 
-    union {
-        // ADAM parameters
-        struct {
-            int n_iter;
+    // ADAM parameters
+    struct {
+        int n_iter;
 
-            float alpha; // learning rate
-            float beta1;
-            float beta2;
-            float eps;   // epsilon for numerical stability
-            float eps_f; // epsilon for convergence test
-            float eps_g; // epsilon for convergence test
-        } adam;
+        float alpha; // learning rate
+        float beta1;
+        float beta2;
+        float eps;   // epsilon for numerical stability
+        float eps_f; // epsilon for convergence test
+        float eps_g; // epsilon for convergence test
+    } adam;
 
-        // LBFGS parameters
-        struct {
-            int m; // number of corrections to approximate the inv. Hessian
-            int n_iter;
-            int max_linesearch;
+    // LBFGS parameters
+    struct {
+        int m; // number of corrections to approximate the inv. Hessian
+        int n_iter;
+        int max_linesearch;
 
-            float eps;      // convergence tolerance
-            float ftol;     // line search tolerance
-            float wolfe;
-            float min_step;
-            float max_step;
+        float eps;      // convergence tolerance
+        float ftol;     // line search tolerance
+        float wolfe;
+        float min_step;
+        float max_step;
 
-            enum ggml_linesearch linesearch;
-        } lbfgs;
-    };
+        enum ggml_linesearch linesearch;
+    } lbfgs;
 };
 
 struct ggml_opt_params ggml_opt_default_params(enum ggml_opt_type type);
@@ -726,10 +733,15 @@ enum ggml_opt_result ggml_opt(
 int ggml_cpu_has_avx(void);
 int ggml_cpu_has_avx2(void);
 int ggml_cpu_has_avx512(void);
+int ggml_cpu_has_fma(void);
 int ggml_cpu_has_neon(void);
+int ggml_cpu_has_arm_fma(void);
+int ggml_cpu_has_f16c(void);
 int ggml_cpu_has_fp16_va(void);
 int ggml_cpu_has_wasm_simd(void);
 int ggml_cpu_has_blas(void);
+int ggml_cpu_has_sse3(void);
+int ggml_cpu_has_vsx(void);
 
 #ifdef  __cplusplus
 }
